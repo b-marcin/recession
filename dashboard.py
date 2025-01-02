@@ -1,10 +1,10 @@
 import streamlit as st
 import pandas as pd
-import pandas_datareader.data as web
+import numpy as np
+from fredapi import Fred
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
-import numpy as np
 
 # Configure the page
 st.set_page_config(
@@ -20,12 +20,19 @@ This dashboard tracks key economic indicators that are commonly used to predict 
 Data is sourced from FRED (Federal Reserve Economic Data). Warning indicators are based on historical patterns.
 """)
 
+# Initialize FRED API
+if 'FRED_API_KEY' not in st.secrets:
+    st.error("Please set your FRED API key in the secrets management.")
+    st.stop()
+
+fred = Fred(api_key=st.secrets["FRED_API_KEY"])
+
 # Function to fetch FRED data
 @st.cache_data(ttl=86400)  # Cache for 24 hours
 def get_fred_data(series_id, start_date, end_date):
     try:
-        df = web.DataReader(series_id, 'fred', start_date, end_date)
-        return df
+        series = fred.get_series(series_id, observation_start=start_date, observation_end=end_date)
+        return pd.DataFrame(series, columns=[series_id])
     except Exception as e:
         st.error(f"Error fetching data for {series_id}: {str(e)}")
         return pd.DataFrame()
@@ -52,7 +59,9 @@ def check_industrial_production_decline(df):
     if len(df) < 6:
         return "Insufficient Data"
     
-    six_month_change = (df.iloc[-1].values[0] - df.iloc[-6].values[0]) / df.iloc[-6].values[0] * 100
+    latest_value = df.iloc[-1].values[0]
+    six_months_ago = df.iloc[-6].values[0]
+    six_month_change = (latest_value - six_months_ago) / six_months_ago * 100
     
     if six_month_change < -2:
         return "High Risk ⚠️"
