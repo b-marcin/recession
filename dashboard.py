@@ -645,11 +645,283 @@ fig.update_layout(
 
 st.plotly_chart(fig, use_container_width=True)
 
-# Footer with timestamp and disclaimer
+# Add to the sidebar (place after the time period selector)
+st.sidebar.markdown("---")
+st.sidebar.header("⚙️ Dashboard Settings")
+
+# Customization options
+show_advanced = st.sidebar.checkbox("Show Advanced Metrics", value=True)
+show_ml_predictions = st.sidebar.checkbox("Show ML Predictions", value=True)
+show_correlations = st.sidebar.checkbox("Show Cross-Correlations", value=True)
+
+# Risk threshold customization
+st.sidebar.subheader("Risk Thresholds")
+custom_thresholds = {}
+for indicator, meta in INDICATORS.items():
+    if meta['warning_threshold'] is not None:
+        default_threshold = meta['warning_threshold']
+        custom_thresholds[indicator] = st.sidebar.slider(
+            f"{meta['name']} Warning Threshold",
+            min_value=float(default_threshold * 2),
+            max_value=float(default_threshold / 2),
+            value=float(default_threshold),
+            step=0.1
+        )
+
+# Export options
+st.sidebar.markdown("---")
+st.sidebar.subheader("📤 Export Options")
+
+if st.sidebar.button("Export Current Data"):
+    # Prepare export data
+    export_data = pd.DataFrame()
+    for series_id, data in indicator_data.items():
+        if series_id != 'USREC':
+            export_data[INDICATORS[series_id]['name']] = data[data.columns[0]]
+    
+    # Convert to CSV
+    csv = export_data.to_csv()
+    
+    # Create download button
+    st.sidebar.download_button(
+        label="Download CSV",
+        data=csv,
+        file_name="recession_indicators.csv",
+        mime="text/csv"
+    )
+
+# Add advanced metrics section if enabled
+if show_advanced:
+    st.markdown("---")
+    st.header("📊 Advanced Metrics")
+    
+    adv_col1, adv_col2 = st.columns(2)
+    
+    with adv_col1:
+        # Momentum Analysis
+        st.subheader("Momentum Analysis")
+        
+        momentum_data = pd.DataFrame()
+        for series_id, data in indicator_data.items():
+            if series_id != 'USREC':
+                series = data[data.columns[0]]
+                momentum_data[INDICATORS[series_id]['name']] = (
+                    series.pct_change(periods=6) * 100
+                )
+        
+        # Create momentum heatmap
+        fig = go.Figure(data=go.Heatmap(
+            z=momentum_data.iloc[-6:].values,
+            x=momentum_data.columns,
+            y=[f"M-{i}" for i in range(6, 0, -1)],
+            colorscale='RdYlGn',
+            zmin=-5,
+            zmax=5
+        ))
+        
+        fig.update_layout(
+            title="6-Month Momentum Heatmap",
+            height=300
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with adv_col2:
+        # Volatility Analysis
+        st.subheader("Volatility Analysis")
+        
+        volatility_data = pd.DataFrame()
+        for series_id, data in indicator_data.items():
+            if series_id != 'USREC':
+                series = data[data.columns[0]]
+                volatility_data[INDICATORS[series_id]['name']] = (
+                    series.rolling(window=30).std() * np.sqrt(12)
+                )
+        
+        fig = go.Figure()
+        for column in volatility_data.columns:
+            fig.add_trace(
+                go.Scatter(
+                    x=volatility_data.index,
+                    y=volatility_data[column],
+                    name=column
+                )
+            )
+        
+        fig.update_layout(
+            title="Annualized Rolling Volatility (30-day)",
+            height=300,
+            showlegend=True
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+
+# Add technical analysis section
 st.markdown("---")
-st.markdown(f"""
+st.header("📈 Technical Analysis")
+
+tech_col1, tech_col2 = st.columns(2)
+
+with tech_col1:
+    # Moving Average Crossovers
+    st.subheader("Moving Average Analysis")
+    
+    if 'USSLIND' in indicator_data:
+        lei_data = indicator_data['USSLIND']
+        lei_data['MA50'] = lei_data['USSLIND'].rolling(window=50).mean()
+        lei_data['MA200'] = lei_data['USSLIND'].rolling(window=200).mean()
+        
+        fig = go.Figure()
+        fig.add_trace(
+            go.Scatter(
+                x=lei_data.index,
+                y=lei_data['USSLIND'],
+                name='Leading Index'
+            )
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=lei_data.index,
+                y=lei_data['MA50'],
+                name='50-day MA',
+                line=dict(dash='dash')
+            )
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=lei_data.index,
+                y=lei_data['MA200'],
+                name='200-day MA',
+                line=dict(dash='dot')
+            )
+        )
+        
+        fig.update_layout(
+            title="Leading Index Moving Averages",
+            height=400
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+
+with tech_col2:
+    # Rate of Change Analysis
+    st.subheader("Rate of Change Analysis")
+    
+    if 'T10Y2Y' in indicator_data:
+        roc_data = indicator_data['T10Y2Y']
+        roc_data['ROC_30'] = roc_data['T10Y2Y'].diff(periods=30)
+        roc_data['ROC_90'] = roc_data['T10Y2Y'].diff(periods=90)
+        
+        fig = go.Figure()
+        fig.add_trace(
+            go.Scatter(
+                x=roc_data.index,
+                y=roc_data['ROC_30'],
+                name='30-day ROC'
+            )
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=roc_data.index,
+                y=roc_data['ROC_90'],
+                name='90-day ROC'
+            )
+        )
+        
+        fig.update_layout(
+            title="Yield Curve Rate of Change",
+            height=400
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+
+# Add documentation section
+st.markdown("---")
+st.header("📚 Dashboard Documentation")
+with st.expander("How to Use This Dashboard"):
+    st.markdown("""
+    ### Quick Start Guide
+    
+    1. **Main Indicators**
+        - The gauge shows overall recession risk
+        - Warning signals highlight immediate concerns
+        - Tabs show detailed indicator analysis
+    
+    2. **ML Predictions**
+        - 6-month forward recession probability
+        - Based on historical patterns
+        - Updated daily with latest data
+    
+    3. **Market Timing**
+        - High Risk (>70%): Consider defensive positioning
+        - Elevated Risk (30-70%): Increase monitoring
+        - Low Risk (<30%): Normal market exposure
+    
+    4. **Customization**
+        - Adjust time periods in sidebar
+        - Modify risk thresholds
+        - Toggle advanced features
+    
+    ### Indicator Descriptions
+    
+    1. **Yield Curve (10Y-2Y)**
+        - Key recession predictor
+        - Inversion often precedes recessions
+        - Historical lead time: 12-18 months
+    
+    2. **Leading Economic Index**
+        - Composite of multiple indicators
+        - Forward-looking measure
+        - Strong trend indicator
+    
+    3. **Financial Stress Index**
+        - Measures market stress
+        - Combines multiple market indicators
+        - Quick to respond to conditions
+    
+    ### Data Sources & Updates
+    
+    - All data from Federal Reserve Economic Data (FRED)
+    - Updated daily during market hours
+    - Historical data available up to 10 years
+    """)
+
+# Add download full report button
+if st.button("Generate Full Report"):
+    # Create report
+    report = pd.DataFrame({
+        'Metric': ['Overall Risk Score', 'ML Recession Probability', 'Warning Signals'],
+        'Value': [
+            f"{composite_risk:.1f}%",
+            f"{recession_prob*100:.1f}%",
+            len(warning_signals)
+        ],
+        'Status': [
+            "High" if composite_risk > 66 else "Moderate" if composite_risk > 33 else "Low",
+            "High" if recession_prob > 0.7 else "Moderate" if recession_prob > 0.3 else "Low",
+            "High" if len(warning_signals) > 2 else "Moderate" if len(warning_signals) > 0 else "Low"
+        ]
+    })
+    
+    # Convert to CSV
+    csv = report.to_csv(index=False)
+    
+    # Create download button
+    st.download_button(
+        label="Download Report",
+        data=csv,
+        file_name="recession_risk_report.csv",
+        mime="text/csv"
+    )
+
+# Footer with additional information
+st.markdown("---")
+st.markdown("""
+<small>
+**Disclaimer:** This dashboard is for informational purposes only. All predictions and analyses should be used as one of many tools for market analysis and decision making.
+
 **Data Sources:** Federal Reserve Economic Data (FRED)  
-**Last Updated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  
-**Disclaimer:** This dashboard combines traditional indicators with machine learning predictions. 
-Past performance does not guarantee future results. Use for informational purposes only.
-""")
+**Last Updated:** {} UTC  
+**Version:** 4.0
+</small>
+""".format(datetime.now().strftime('%Y-%m-%d %H:%M:%S')), unsafe_allow_html=True)
