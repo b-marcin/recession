@@ -9,13 +9,6 @@ from datetime import datetime, timedelta
 # Page config
 st.set_page_config(page_title="Enhanced Recession Risk Dashboard", page_icon="📈", layout="wide")
 
-# Title and description
-st.title("🌡️ Enhanced Recession Risk Dashboard")
-st.markdown("""
-This dashboard combines multiple leading indicators to provide an early warning system for recession risks.
-Indicators are weighted based on their historical predictive power.
-""")
-
 # Initialize FRED API
 if 'FRED_API_KEY' not in st.secrets:
     st.error("Please set your FRED API key in the secrets management.")
@@ -36,258 +29,282 @@ def get_fred_data(series_id, start_date, end_date, retries=3):
                 return pd.DataFrame()
             continue
 
-# Define indicator weights and thresholds
-INDICATOR_WEIGHTS = {
-    'T10Y2Y': 0.25,    # Yield curve (strongest predictor)
-    'USSLIND': 0.20,   # Leading Index
-    'UNRATE': 0.15,    # Unemployment
-    'BAA10Y': 0.15,    # Corporate Bond Spread
-    'INDPRO': 0.15,    # Industrial Production
-    'KCFSI': 0.10     # Financial Stress
-}
+def calculate_yield_curve_probability(spread):
+    if spread <= -0.5:
+        return "High Risk ⚠️"
+    elif spread <= 0:
+        return "Moderate Risk ⚡"
+    else:
+        return "Low Risk ✅"
 
-# Calculate composite risk score (0-100)
-def calculate_composite_risk(indicators_data):
-    scores = {}
+def calculate_unemployment_warning(current, rolling_mean):
+    if current > rolling_mean * 1.1:  # 10% above moving average
+        return "High Risk ⚠️"
+    elif current > rolling_mean * 1.05:  # 5% above moving average
+        return "Moderate Risk ⚡"
+    return "Low Risk ✅"
+
+def check_industrial_production_decline(df):
+    if len(df) < 6:
+        return "Insufficient Data"
     
-    # Yield Curve Score
-    if 'T10Y2Y' in indicators_data:
-        value = indicators_data['T10Y2Y'].iloc[-1]
-        scores['T10Y2Y'] = max(0, min(100, ((-value + 0.5) * 100)))
+    six_month_change = df[df.columns[0]].pct_change(periods=6).iloc[-1] * 100
     
-    # Leading Index Score
-    if 'USSLIND' in indicators_data:
-        value = indicators_data['USSLIND'].iloc[-1]
-        mom_change = indicators_data['USSLIND'].pct_change(periods=3).iloc[-1] * 100
-        scores['USSLIND'] = max(0, min(100, (-mom_change + 1) * 50))
-    
-    # Unemployment Score
-    if 'UNRATE' in indicators_data:
-        current = indicators_data['UNRATE'].iloc[-1]
-        ma12 = indicators_data['UNRATE'].rolling(12).mean().iloc[-1]
-        scores['UNRATE'] = max(0, min(100, ((current/ma12 - 1) * 500)))
-    
-    # Corporate Bond Spread Score
-    if 'BAA10Y' in indicators_data:
-        value = indicators_data['BAA10Y'].iloc[-1]
-        scores['BAA10Y'] = max(0, min(100, (value - 2) * 33.33))
-    
-    # Industrial Production Score
-    if 'INDPRO' in indicators_data:
-        mom_change = indicators_data['INDPRO'].pct_change(periods=6).iloc[-1] * 100
-        scores['INDPRO'] = max(0, min(100, (-mom_change + 2) * 33.33))
-    
-    # Financial Stress Score
-    if 'KCFSI' in indicators_data:
-        value = indicators_data['KCFSI'].iloc[-1]
-        scores['KCFSI'] = max(0, min(100, (value + 1) * 50))
-    
-    # Calculate weighted average
-    weighted_score = sum(scores[k] * INDICATOR_WEIGHTS[k] for k in scores.keys())
-    
-    return weighted_score, scores
+    if six_month_change < -2:
+        return "High Risk ⚠️"
+    elif six_month_change < 0:
+        return "Moderate Risk ⚡"
+    return "Low Risk ✅"
 
 # Set date range
 end_date = datetime.now()
 start_date = end_date - timedelta(days=365*10)
 
+# Define all indicators
+indicators = {
+    'T10Y2Y': 'Treasury Yield Spread (10Y-2Y)',
+    'UNRATE': 'Unemployment Rate',
+    'INDPRO': 'Industrial Production',
+    'KCFSI': 'Kansas City Fed Financial Stress Index',
+    'USREC': 'NBER Recession Indicator',
+    'USSLIND': 'Leading Index',
+    'BAA10Y': 'Corporate Bond Spread'
+}
+
 # Fetch all indicators
-indicators_data = {}
-for series_id in INDICATOR_WEIGHTS.keys():
+indicator_data = {}
+for series_id in indicators.keys():
     data = get_fred_data(series_id, start_date, end_date)
     if not data.empty:
-        indicators_data[series_id] = data[series_id]
+        indicator_data[series_id] = data
 
-# Calculate composite risk
-if indicators_data:
-    composite_score, individual_scores = calculate_composite_risk(indicators_data)
-else:
-    st.error("Unable to fetch required data.")
-    st.stop()
-
-# Main dashboard layout
+# Create columns for layout
 col1, col2 = st.columns([2, 1])
 
 with col1:
-    # Composite Risk Gauge
-    st.subheader("📊 Composite Recession Risk")
-    
-    fig = go.Figure(go.Indicator(
-        mode = "gauge+number",
-        value = composite_score,
-        domain = {'x': [0, 1], 'y': [0, 1]},
-        gauge = {
-            'axis': {'range': [0, 100], 'tickwidth': 1},
-            'bar': {'color': "darkblue"},
-            'steps': [
-                {'range': [0, 33], 'color': "lightgreen"},
-                {'range': [33, 66], 'color': "yellow"},
-                {'range': [66, 100], 'color': "red"}
-            ],
-            'threshold': {
-                'line': {'color': "red", 'width': 4},
-                'thickness': 0.75,
-                'value': 80
-            }
-        },
-        title = {'text': "Recession Risk Score"}
-    ))
-    
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # Leading Index and Corporate Spread
-    st.subheader("📈 Leading Economic Indicators")
-    
+    # Yield Curve Plot
+    st.subheader("📊 Treasury Yield Spread (10Y-2Y)")
+    if 'T10Y2Y' in indicator_data:
+        yield_curve = indicator_data['T10Y2Y']
+        current_spread = yield_curve['T10Y2Y'].iloc[-1]
+        recession_probability = calculate_yield_curve_probability(current_spread)
+        
+        st.markdown(f"**Current Status: {recession_probability}**")
+        
+        fig = go.Figure()
+        fig.add_trace(
+            go.Scatter(
+                x=yield_curve.index,
+                y=yield_curve['T10Y2Y'],
+                name='Spread',
+                line=dict(color='blue')
+            )
+        )
+        fig.add_hrect(y0=-0.5, y1=-5, 
+                     fillcolor="red", opacity=0.1, 
+                     line_width=0, name="High Risk Zone")
+        fig.add_hrect(y0=0, y1=-0.5, 
+                     fillcolor="yellow", opacity=0.1, 
+                     line_width=0, name="Moderate Risk Zone")
+        fig.add_hline(y=0, line_dash="dash", line_color="red")
+        fig.update_layout(height=400, showlegend=True)
+        st.plotly_chart(fig, use_container_width=True)
+
     # Create tabs for different indicators
-    tab1, tab2, tab3 = st.tabs(["Leading Index", "Corporate Spread", "Industrial Production"])
+    tab1, tab2, tab3, tab4 = st.tabs(["Unemployment", "Industrial Production", "Leading Index", "Corporate Spread"])
     
     with tab1:
-        if 'USSLIND' in indicators_data:
+        if 'UNRATE' in indicator_data:
+            unemployment = indicator_data['UNRATE']
+            unemployment['MA12'] = unemployment['UNRATE'].rolling(window=12).mean()
+            current_rate = unemployment['UNRATE'].iloc[-1]
+            moving_avg = unemployment['MA12'].iloc[-1]
+            warning_status = calculate_unemployment_warning(current_rate, moving_avg)
+            
+            st.markdown(f"**Current Status: {warning_status}**")
+            
             fig = go.Figure()
-            fig.add_trace(go.Scatter(
-                x=indicators_data['USSLIND'].index,
-                y=indicators_data['USSLIND'],
-                name='Leading Index',
-                line=dict(color='blue')
-            ))
-            fig.add_trace(go.Scatter(
-                x=indicators_data['USSLIND'].index,
-                y=indicators_data['USSLIND'].rolling(window=3).mean(),
-                name='3-Month Average',
-                line=dict(color='red', dash='dash')
-            ))
-            fig.update_layout(title_text="Conference Board Leading Economic Index")
+            fig.add_trace(
+                go.Scatter(
+                    x=unemployment.index,
+                    y=unemployment['UNRATE'],
+                    name='Unemployment Rate',
+                    line=dict(color='red')
+                )
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=unemployment.index,
+                    y=unemployment['MA12'],
+                    name='12-month Moving Average',
+                    line=dict(color='gray', dash='dash')
+                )
+            )
+            fig.update_layout(height=400)
             st.plotly_chart(fig, use_container_width=True)
     
     with tab2:
-        if 'BAA10Y' in indicators_data:
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(
-                x=indicators_data['BAA10Y'].index,
-                y=indicators_data['BAA10Y'],
-                name='BAA-10Y Spread',
-                line=dict(color='purple')
-            ))
-            fig.add_hrect(y0=3, y1=5, 
-                         fillcolor="red", opacity=0.1,
-                         line_width=0, name="High Risk Zone")
-            fig.update_layout(title_text="Corporate Bond Spread (BAA-10Y)")
+        if 'INDPRO' in indicator_data:
+            production = indicator_data['INDPRO']
+            warning_status = check_industrial_production_decline(production)
+            st.markdown(f"**Current Status: {warning_status}**")
+            
+            fig = make_subplots(specs=[[{"secondary_y": True}]])
+            
+            fig.add_trace(
+                go.Scatter(
+                    x=production.index,
+                    y=production['INDPRO'],
+                    name='Industrial Production',
+                    line=dict(color='green')
+                ),
+                secondary_y=False
+            )
+            
+            # Calculate and add 6-month change
+            production['Change'] = production['INDPRO'].pct_change(periods=6) * 100
+            
+            fig.add_trace(
+                go.Scatter(
+                    x=production.index,
+                    y=production['Change'],
+                    name='6-Month Change (%)',
+                    line=dict(color='orange', dash='dash')
+                ),
+                secondary_y=True
+            )
+            
+            fig.update_layout(height=400)
             st.plotly_chart(fig, use_container_width=True)
-    
+
     with tab3:
-        if 'INDPRO' in indicators_data:
+        if 'USSLIND' in indicator_data:
+            leading_index = indicator_data['USSLIND']
+            
             fig = go.Figure()
-            fig.add_trace(go.Scatter(
-                x=indicators_data['INDPRO'].index,
-                y=indicators_data['INDPRO'].pct_change(periods=6) * 100,
-                name='6-Month Change',
-                line=dict(color='green')
-            ))
-            fig.add_hrect(y0=-2, y1=-10,
-                         fillcolor="red", opacity=0.1,
-                         line_width=0, name="Contraction Zone")
-            fig.update_layout(title_text="Industrial Production (6-Month Change)")
+            fig.add_trace(
+                go.Scatter(
+                    x=leading_index.index,
+                    y=leading_index['USSLIND'],
+                    name='Leading Index',
+                    line=dict(color='purple')
+                )
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=leading_index.index,
+                    y=leading_index['USSLIND'].rolling(window=3).mean(),
+                    name='3-Month Average',
+                    line=dict(color='gray', dash='dash')
+                )
+            )
+            fig.update_layout(height=400)
+            st.plotly_chart(fig, use_container_width=True)
+
+    with tab4:
+        if 'BAA10Y' in indicator_data:
+            bond_spread = indicator_data['BAA10Y']
+            
+            fig = go.Figure()
+            fig.add_trace(
+                go.Scatter(
+                    x=bond_spread.index,
+                    y=bond_spread['BAA10Y'],
+                    name='BAA-10Y Spread',
+                    line=dict(color='brown')
+                )
+            )
+            fig.add_hrect(
+                y0=3, y1=5,
+                fillcolor="red", opacity=0.1,
+                line_width=0, name="High Risk Zone"
+            )
+            fig.update_layout(height=400)
             st.plotly_chart(fig, use_container_width=True)
 
 with col2:
-    # Risk Breakdown
-    st.subheader("🔍 Risk Breakdown")
-    
-    risk_data = []
-    for indicator, weight in INDICATOR_WEIGHTS.items():
-        if indicator in individual_scores:
-            risk_data.append({
-                "Indicator": indicator,
-                "Risk Score": round(individual_scores[indicator], 1),
-                "Weight": f"{weight*100}%",
-                "Contribution": round(individual_scores[indicator] * weight, 1)
-            })
-    
-    risk_df = pd.DataFrame(risk_data)
-    risk_df = risk_df.sort_values("Contribution", ascending=False)
-    
-    # Color-code the risk scores
-    def color_risk(val):
-        if isinstance(val, (int, float)):
-            if val >= 66:
-                return 'background-color: rgba(255,0,0,0.2)'
-            elif val >= 33:
-                return 'background-color: rgba(255,255,0,0.2)'
-            else:
-                return 'background-color: rgba(0,255,0,0.2)'
-        return ''
-    
-    st.dataframe(risk_df.style.applymap(color_risk, subset=['Risk Score']))
-    
-    # Historical Comparison
-    st.subheader("📊 Historical Context")
-    
-    # Calculate historical risk scores
-    historical_scores = pd.DataFrame(index=indicators_data['T10Y2Y'].index)
-    historical_scores['Risk Score'] = 0
-    
-    for date in historical_scores.index:
-        point_data = {k: v[v.index <= date].iloc[-1] for k, v in indicators_data.items()}
-        score, _ = calculate_composite_risk(point_data)
-        historical_scores.loc[date, 'Risk Score'] = score
-    
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=historical_scores.index,
-        y=historical_scores['Risk Score'],
-        name='Historical Risk',
-        line=dict(color='blue')
-    ))
-    
-    # Add NBER recession shading if available
-    recession_data = get_fred_data('USREC', start_date, end_date)
-    if not recession_data.empty:
-        recession_periods = []
-        in_recession = False
-        start = None
+    # Financial Stress Index
+    st.subheader("💹 Financial Stress Index")
+    if 'KCFSI' in indicator_data:
+        stress_index = indicator_data['KCFSI']
+        current_stress = stress_index['KCFSI'].iloc[-1]
+        stress_warning = "High Risk ⚠️" if current_stress > 1 else "Moderate Risk ⚡" if current_stress > 0 else "Low Risk ✅"
         
-        for date, value in recession_data.iterrows():
-            if value.iloc[0] == 1 and not in_recession:
-                start = date
-                in_recession = True
-            elif value.iloc[0] == 0 and in_recession:
-                recession_periods.append((start, date))
-                in_recession = False
+        st.markdown(f"**Current Status: {stress_warning}**")
         
-        for start, end in recession_periods:
-            fig.add_vrect(
-                x0=start,
-                x1=end,
-                fillcolor="gray",
-                opacity=0.2,
-                layer="below",
-                line_width=0
+        fig = go.Figure()
+        fig.add_trace(
+            go.Scatter(
+                x=stress_index.index,
+                y=stress_index['KCFSI'],
+                name='Stress Index',
+                line=dict(color='purple')
             )
-    
-    fig.update_layout(
-        title_text="Historical Risk Score",
-        yaxis_title="Risk Score",
-        height=300
-    )
-    st.plotly_chart(fig, use_container_width=True)
+        )
+        fig.add_hrect(y0=1, y1=5,
+                     fillcolor="red", opacity=0.1,
+                     line_width=0, name="High Risk Zone")
+        fig.add_hrect(y0=0, y1=1,
+                     fillcolor="yellow", opacity=0.1,
+                     line_width=0, name="Moderate Risk Zone")
+        fig.add_hline(y=0, line_dash="dash", line_color="gray")
+        fig.update_layout(height=300)
+        st.plotly_chart(fig, use_container_width=True)
 
-    # Current Risk Assessment
-    risk_level = "High" if composite_score >= 66 else "Moderate" if composite_score >= 33 else "Low"
-    risk_color = "red" if risk_level == "High" else "orange" if risk_level == "Moderate" else "green"
+    # Risk Assessment
+    st.subheader("🚨 Risk Assessment")
     
-    st.markdown(f"""
-    ### Current Risk Assessment
+    risk_indicators = []
     
-    **Overall Risk Level:** ::{risk_color}[{risk_level}]
+    if 'T10Y2Y' in indicator_data:
+        risk_indicators.append({
+            "Indicator": "Yield Curve",
+            "Status": calculate_yield_curve_probability(indicator_data['T10Y2Y']['T10Y2Y'].iloc[-1])
+        })
     
-    **Composite Score:** {composite_score:.1f}/100
+    if 'UNRATE' in indicator_data:
+        unemployment = indicator_data['UNRATE']
+        ma12 = unemployment['UNRATE'].rolling(12).mean()
+        risk_indicators.append({
+            "Indicator": "Unemployment",
+            "Status": calculate_unemployment_warning(
+                unemployment['UNRATE'].iloc[-1],
+                ma12.iloc[-1]
+            )
+        })
     
-    **Key Contributors:**
-    {risk_df.iloc[0]['Indicator']}: {risk_df.iloc[0]['Contribution']:.1f} points
-    {risk_df.iloc[1]['Indicator']}: {risk_df.iloc[1]['Contribution']:.1f} points
-    """)
+    if 'INDPRO' in indicator_data:
+        risk_indicators.append({
+            "Indicator": "Industrial Production",
+            "Status": check_industrial_production_decline(indicator_data['INDPRO'])
+        })
+    
+    if 'KCFSI' in indicator_data:
+        risk_indicators.append({
+            "Indicator": "Financial Stress",
+            "Status": stress_warning
+        })
+    
+    if risk_indicators:
+        risk_df = pd.DataFrame(risk_indicators)
+        st.table(risk_df)
+        
+        high_risk_count = sum(1 for x in risk_indicators if "High Risk" in x["Status"])
+        moderate_risk_count = sum(1 for x in risk_indicators if "Moderate Risk" in x["Status"])
+        
+        if high_risk_count >= 2:
+            overall_status = "High Risk ⚠️"
+            status_color = "red"
+        elif high_risk_count + moderate_risk_count >= 2:
+            overall_status = "Moderate Risk ⚡"
+            status_color = "orange"
+        else:
+            overall_status = "Low Risk ✅"
+            status_color = "green"
+        
+        st.markdown(f"### Overall Risk Level: ::{status_color}[{overall_status}]")
 
-# Footer
+# Add footer with data source
 st.markdown("---")
 st.markdown("""
 Data source: Federal Reserve Economic Data (FRED)  
